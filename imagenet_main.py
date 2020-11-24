@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+random.seed(0)
 import shutil
 import time
 import warnings
@@ -34,7 +35,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('-j', '--workers', default=1, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 1)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -87,9 +88,11 @@ def main():
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
         np.random.seed(args.seed)
         torch.set_deterministic(True)
         cudnn.deterministic = True
+        cudnn.benchmark = False
         warnings.warn('You have chosen to seed training. '
                       'This will turn on the CUDNN deterministic setting, '
                       'which can slow down your training considerably! '
@@ -191,7 +194,6 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    cudnn.benchmark = True
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
@@ -214,7 +216,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        train_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
@@ -324,8 +326,6 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
         if i > 5:
             measurements.append(elapsed_time)
             examples += len(images)
-        if i == 5:
-            print(len(images))
         end = time.time()
 
         if i % args.print_freq == 0:

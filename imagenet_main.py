@@ -1,13 +1,11 @@
 import argparse
 import os
 import random
-random.seed(0)
 import shutil
 import time
 import warnings
 
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -20,7 +18,6 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-
 from torch.utils.tensorboard import SummaryWriter
 
 model_names = sorted(name for name in models.__dict__
@@ -36,7 +33,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
-                    help='number of data loading workers (default: 1)')
+                    help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -80,7 +77,6 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'multi node data parallel training')
 
 best_acc1 = 0
-
 global_steps = 0
 global_examples = 0
 
@@ -92,9 +88,7 @@ def main():
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
         np.random.seed(args.seed)
-        torch.set_deterministic(False)
-        cudnn.deterministic = False
-        cudnn.benchmark = True
+        cudnn.deterministic = True
         warnings.warn('You have chosen to seed training. '
                       'This will turn on the CUDNN deterministic setting, '
                       'which can slow down your training considerably! '
@@ -112,6 +106,8 @@ def main():
 
     ngpus_per_node = torch.cuda.device_count()
     if args.multiprocessing_distributed:
+        # Since we have ngpus_per_node processes per node, the total world_size
+        # needs to be adjusted accordingly
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
         mp.spawn(main_worker, nprocs=args.world_size, args=(ngpus_per_node, args))
@@ -121,13 +117,12 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    np.random.seed(args.seed)
-
     global best_acc1
     args.gpu = gpu
+
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    cudnn.deterministic = True
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -161,6 +156,7 @@ def main_worker(gpu, ngpus_per_node, args):
             # When using a single GPU per process and per
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
+            #  args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         else:
@@ -171,6 +167,13 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.gpu is not None:
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
+    else:
+        # DataParallel will divide and allocate batch_size to all available GPUs
+        if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
+            model.features = torch.nn.DataParallel(model.features)
+            model.cuda()
+        else:
+            model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
@@ -201,32 +204,25 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
+    cudnn.benchmark = True
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
+    valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
-    if args.data == 'FAKE':
-        train_dataset = datasets.FakeData(size=100000,
-            transform=transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-            ]))
-    else:
-        train_dataset = datasets.ImageFolder(
-            traindir,
-            transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-            ]))
+    train_dataset = datasets.ImageFolder(
+        traindir,
+        transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize,
+        ]))
 
     if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=False)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     else:
         train_sampler = None
 
@@ -234,6 +230,19 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
+    val_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(valdir, transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize,
+        ])),
+        batch_size=args.batch_size, shuffle=False,
+        num_workers=args.workers, pin_memory=True)
+
+    if args.evaluate:
+        validate(val_loader, model, criterion, args)
+        return
 
     writer = None
     enable_tensorboard = args.rank <= 0
@@ -254,23 +263,8 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, writer, args)
 
-        # evaluate on validation set
-        # acc1 = validate(val_loader, model, criterion, args)
-
-        # # remember best acc@1 and save checkpoint
-        # is_best = acc1 > best_acc1
-        # best_acc1 = max(acc1, best_acc1)
-
-        # if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-        #         and args.rank % ngpus_per_node == 0):
-        #     save_checkpoint({
-        #         'epoch': epoch + 1,
-        #         'arch': args.arch,
-        #         'state_dict': model.state_dict(),
-        #         'best_acc1': best_acc1,
-        #         'optimizer' : optimizer.state_dict(),
-        #     }, is_best)
-
+    global global_steps
+    global global_examples
 
     now = time.time()
     print('Global Steps: ' +  str(global_steps))
@@ -284,24 +278,18 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
 def train(train_loader, model, criterion, optimizer, epoch, writer, args):
-    global global_examples
-    global global_steps
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
-    example_speed = AverageMeter('Speed', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, example_speed, losses],
+        [batch_time, data_time, losses],
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
     model.train()
 
     end = time.time()
-
-    measurements = []
-
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -315,31 +303,31 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
         output = model(images)
         loss = criterion(output, target)
 
-        #print(str(i) + ': ' + str(loss.item()))
-        #if i == 0:
-        #    print(images)
+        # measure accuracy and record loss
+        # acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), images.size(0))
+        # top1.update(acc1[0], images.size(0))
+        # top5.update(acc5[0], images.size(0))
+
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
+        
         # measure elapsed time
-        elapsed_time = time.time() - end
-        batch_time.update(elapsed_time)
-        speed = len(images) / elapsed_time
-        example_speed.update(speed)
-        # Skip warmup
-        measurements.append(elapsed_time)
-        global_examples += len(images)
-
+        batch_time.update(time.time() - end)
         end = time.time()
+
+        global global_steps
+        global global_examples
+        
+        global_examples += len(images)
 
         if i % args.print_freq == 0:
             progress.display(i)
             writer.add_scalar('loss/step', loss.item(), global_steps)
             global_steps += args.print_freq
-
 
 def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter('Time', ':6.3f')

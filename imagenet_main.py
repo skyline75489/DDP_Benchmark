@@ -35,7 +35,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 1)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -81,6 +81,8 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
 
 best_acc1 = 0
 
+global_steps = 0
+global_examples = 0
 
 def main():
     args = parser.parse_args()
@@ -90,9 +92,9 @@ def main():
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
         np.random.seed(args.seed)
-        torch.set_deterministic(True)
-        cudnn.deterministic = True
-        cudnn.benchmark = False
+        torch.set_deterministic(False)
+        cudnn.deterministic = False
+        cudnn.benchmark = True
         warnings.warn('You have chosen to seed training. '
                       'This will turn on the CUDNN deterministic setting, '
                       'which can slow down your training considerably! '
@@ -159,7 +161,7 @@ def main_worker(gpu, ngpus_per_node, args):
             # When using a single GPU per process and per
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
-            # args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
+            args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         else:
             model.cuda()
@@ -202,25 +204,29 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]))
-
-    print(train_dataset.classes)
-    for i in range(20):
-        print(train_dataset.samples[i])
+    if args.data == 'FAKE':
+        train_dataset = datasets.FakeData(size=100000,
+            transform=transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ]))
+    else:
+        train_dataset = datasets.ImageFolder(
+            traindir,
+            transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ]))
 
     if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=False)
     else:
         train_sampler = None
 
@@ -228,19 +234,6 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
-    val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
-
-    if args.evaluate:
-        validate(val_loader, model, criterion, args)
-        return
 
     writer = None
     enable_tensorboard = args.rank <= 0
@@ -250,6 +243,8 @@ def main_worker(gpu, ngpus_per_node, args):
             writer = SummaryWriter(comment='_' + args.arch + '_no_ddp' )
         else:
             writer = SummaryWriter(comment='_' + args.arch + '_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs')
+
+    train_raw_start = time.time()
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -276,20 +271,28 @@ def main_worker(gpu, ngpus_per_node, args):
         #         'optimizer' : optimizer.state_dict(),
         #     }, is_best)
 
+
+    now = time.time()
+    print('Global Steps: ' +  str(global_steps))
+    print('Total Examples: ' + str(global_examples))
+    print('Train duration: ' + str(now - train_raw_start))
+    print('Example/Sec: ' + str(global_examples / (now - train_raw_start)))
+
+    writer.add_scalar('speed/step', global_examples / (now - train_raw_start), global_steps)
     if writer is not None:
         writer.close()
 
 
 def train(train_loader, model, criterion, optimizer, epoch, writer, args):
+    global global_examples
+    global global_steps
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     example_speed = AverageMeter('Speed', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, example_speed, losses, top1, top5],
+        [batch_time, data_time, example_speed, losses],
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
@@ -298,9 +301,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
     end = time.time()
 
     measurements = []
-    examples = 0
 
-    total_loss = 0
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -314,16 +315,10 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
         output = model(images)
         loss = criterion(output, target)
 
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        total_loss += loss.item()
-        print(str(i) + ': ' + str(loss.item()))
-        if i == 0:
-            print(images)
+        #print(str(i) + ': ' + str(loss.item()))
+        #if i == 0:
+        #    print(images)
         losses.update(loss.item(), images.size(0))
-        top1.update(acc1[0], images.size(0))
-        top5.update(acc5[0], images.size(0))
-
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
@@ -335,24 +330,15 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
         speed = len(images) / elapsed_time
         example_speed.update(speed)
         # Skip warmup
-        if i > 5:
-            measurements.append(elapsed_time)
-            examples += len(images)
+        measurements.append(elapsed_time)
+        global_examples += len(images)
+
         end = time.time()
 
         if i % args.print_freq == 0:
             progress.display(i)
-
-    if writer is not None:
-        writer.add_scalar('loss/epoch', total_loss, epoch)
-        d = {}
-        measurements = sorted(measurements) 
-        for p in [50, 75, 90, 95]:
-            v = np.percentile(measurements, p)
-            d['P'+str(p)] = args.batch_size / v
-        d['avg'] = examples / np.sum(measurements)
-        writer.add_scalars('speed/epoch', d, epoch)
-        writer.flush()
+            writer.add_scalar('loss/step', loss.item(), global_steps)
+            global_steps += args.print_freq
 
 
 def validate(val_loader, model, criterion, args):

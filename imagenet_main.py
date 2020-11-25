@@ -119,6 +119,11 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+
     global best_acc1
     args.gpu = gpu
 
@@ -209,6 +214,10 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize,
         ]))
+
+    print(train_dataset.classes)
+    for i in range(20):
+        print(train_dataset.samples[i])
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -308,6 +317,9 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         total_loss += loss.item()
+        print(str(i) + ': ' + str(loss.item()))
+        if i == 0:
+            print(images)
         losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))

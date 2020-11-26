@@ -263,8 +263,8 @@ def main_worker(gpu, ngpus_per_node, args):
     print('Train duration: ' + str(now - train_raw_start))
     print('Example/Sec: ' + str(global_examples / (now - train_raw_start)))
 
-    writer.add_scalar('speed/step', global_examples / (now - train_raw_start), global_steps)
     if writer is not None:
+        writer.add_scalar('speed/step', global_examples / (now - train_raw_start), global_steps)
         writer.close()
 
 

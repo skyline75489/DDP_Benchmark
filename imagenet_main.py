@@ -209,7 +209,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                      std=[0.229, 0.224, 0.225])
 
     if args.data == 'FAKE':
-        train_dataset = datasets.FakeData(size=250000, num_classes=200,
+        train_dataset = datasets.FakeData(size=260000, num_classes=208,
             transform=transforms.Compose([
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
@@ -232,7 +232,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=False,
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     writer = None
@@ -240,9 +240,9 @@ def main_worker(gpu, ngpus_per_node, args):
     if enable_tensorboard:
         if args.rank == -1:
             # No DDP:
-            writer = SummaryWriter(comment='_' + args.arch + '_no_ddp' )
+            writer = SummaryWriter(comment='_' + args.arch + '_no_ddp_' + args.data)
         else:
-            writer = SummaryWriter(comment='_' + args.arch + '_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs')
+            writer = SummaryWriter(comment='_' + args.arch + '_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs_' + args.data)
 
     train_raw_start = time.time()
 

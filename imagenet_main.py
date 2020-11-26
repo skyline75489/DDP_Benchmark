@@ -69,6 +69,7 @@ parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
 parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
+parser.add_argument('--max-step', default=100000, type=int)
 parser.add_argument('--multiprocessing-distributed', action='store_true',
                     help='Use multi-processing distributed training to launch '
                          'N processes per node, which has N GPUs. This is the '
@@ -227,7 +228,7 @@ def main_worker(gpu, ngpus_per_node, args):
             ]))
 
     if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=False)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
     else:
         train_sampler = None
 
@@ -323,6 +324,10 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             progress.display(i)
             if writer is not None:
                 writer.add_scalar('loss/step', loss.item(), global_steps)
+                writer.add_scalar('speed/step', speed, global_steps)
+
+        if global_steps >= args.max_step:
+            break
 
 def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter('Time', ':6.3f')

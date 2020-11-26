@@ -228,12 +228,12 @@ def main_worker(gpu, ngpus_per_node, args):
             ]))
 
     if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=False)
     else:
         train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        train_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     writer = None
@@ -265,7 +265,7 @@ def main_worker(gpu, ngpus_per_node, args):
     print('Example/Sec: ' + str(global_examples / (now - train_raw_start)))
 
     if writer is not None:
-        writer.add_scalar('speed/step', global_examples / (now - train_raw_start), global_steps)
+        writer.add_scalar('overall_speed/step', global_examples / (now - train_raw_start), global_steps)
         writer.close()
 
 

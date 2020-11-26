@@ -326,7 +326,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                 writer.add_scalar('loss/step', loss.item(), global_steps)
                 writer.add_scalar('speed/step', speed, global_steps)
 
-        if global_steps >= args.max_step:
+        if global_steps >= (args.max_step / abs(args.world_size)):
             break
 
 def validate(val_loader, model, criterion, args):

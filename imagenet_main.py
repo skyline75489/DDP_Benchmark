@@ -321,7 +321,8 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
-            writer.add_scalar('loss/step', loss.item(), global_steps)
+            if writer is not None:
+                writer.add_scalar('loss/step', loss.item(), global_steps)
 
 def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter('Time', ':6.3f')

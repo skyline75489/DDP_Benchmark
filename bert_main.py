@@ -289,7 +289,12 @@ def main_worker(gpu, ngpus_per_node, args):
 
         previous_file = data_file
         train_data = pretraining_dataset(data_file, args.max_predictions_per_seq)
-        train_sampler = torch.utils.data.RandomSampler(train_data)
+        if args.distributed:
+            train_sampler = torch.utils.data.distributed.DistributedSampler(train_data, shuffle=False)
+        else:
+            train_sampler = torch.utils.data.RandomSampler(train_data)
+
+
         train_dataloader = torch.utils.data.DataLoader(train_data, sampler=train_sampler,
                                         batch_size=args.batch_size,
                                         num_workers=4,
@@ -297,6 +302,15 @@ def main_worker(gpu, ngpus_per_node, args):
 
         pool = ProcessPoolExecutor(1)
         shared_file_list = {}
+        writer = None
+        enable_tensorboard = args.rank <= 0
+        if enable_tensorboard:
+            if args.rank == -1:
+                # No DDP:
+                writer = SummaryWriter(comment='_bert_no_ddp_' + args.data)
+            else:
+                writer = SummaryWriter(comment='_bert_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs_' + args.data)
+
         for f_id in range(f_start_id + 1 , len(files)):
             if get_world_size() > num_files:
                 data_file = files[(f_id*get_world_size()+get_rank() + remainder*f_id)%num_files]
@@ -323,15 +337,17 @@ def main_worker(gpu, ngpus_per_node, args):
                 losses.update(loss.item())
 
                 # compute gradient and do SGD step
-                optimizer.zero_grad()
+                # optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                for param in model.parameters():
+                    param.grad = None
 
                 # measure elapsed time
                 elapsed_time = time.time() - end
                 batch_time.update(elapsed_time)
                 end = time.time()
-                speed = len(batch) / elapsed_time
+                speed = len(batch[0]) / elapsed_time
                 example_speed.update(speed)
                 global global_steps
                 global global_examples
@@ -339,8 +355,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 global_examples += len(batch)
                 global_steps += 1
 
-                if i % args.print_freq == 0:
-                    progress.display(i)
+                if step % args.print_freq == 0:
+                    progress.display(step)
                     if writer is not None:
                         writer.add_scalar('loss/step', loss.item(), global_steps)
                         writer.add_scalar('speed/step', speed, global_steps)
@@ -351,14 +367,6 @@ def main_worker(gpu, ngpus_per_node, args):
             del train_dataloader
             train_dataloader, data_file = dataset_future.result(timeout=None)
 
-        writer = None
-        enable_tensorboard = args.rank <= 0
-        if enable_tensorboard:
-            if args.rank == -1:
-                # No DDP:
-                writer = SummaryWriter(comment='_bert_no_ddp_' + args.data)
-            else:
-                writer = SummaryWriter(comment='_bert_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs_' + args.data)
 
         now = time.time()
         print('Global Steps: ' +  str(global_steps))

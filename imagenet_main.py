@@ -113,6 +113,11 @@ def main():
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args)
 
+def generate_inputs(batch_size, device):
+    return [torch.rand([batch_size, 3, 224, 224], device=device)]
+
+def generate_target(batch_size, device):
+    return torch.tensor([1] * batch_size, dtype=torch.long, device=device)
 
 def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
@@ -203,7 +208,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     cudnn.benchmark = True
 
-    # Data loading code        
+    # Data loading code
     traindir = os.path.join(args.data, 'train')
     valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -281,53 +286,82 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
 
     # switch to train mode
     model.train()
-
+    global global_steps
+    global global_examples
     end = time.time()
-    for i, (images, target) in enumerate(train_loader):
-        # measure data loading time
-        data_time.update(time.time() - end)
 
-        if args.gpu is not None:
-            images = images.cuda(args.gpu, non_blocking=True)
-        if torch.cuda.is_available():
-            target = target.cuda(args.gpu, non_blocking=True)
+    if args.data == 'FAKE':
+        i = 0
+        for (images, target) in [(generate_inputs(args.batch_size, args.gpu), generate_target(args.batch_size, args.gpu))] * 500:
+            output = model(*images)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
 
-        # compute output
-        output = model(images)
-        loss = criterion(output, target)
+            # measure elapsed time
+            elapsed_time = time.time() - end
+            batch_time.update(elapsed_time)
+            end = time.time()
+            speed = args.batch_size / elapsed_time
+            example_speed.update(speed)
 
-        # measure accuracy and record loss
-        # acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images.size(0))
-        # top1.update(acc1[0], images.size(0))
-        # top5.update(acc5[0], images.size(0))
+            global_examples += args.batch_size
+            global_steps += 1
 
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            if i % args.print_freq == 0:
+                progress.display(i)
+                if writer is not None:
+                    writer.add_scalar('loss/step', loss.item(), global_steps)
+                    writer.add_scalar('speed/step', speed, global_steps)
 
-        
-        # measure elapsed time
-        elapsed_time = time.time() - end
-        batch_time.update(elapsed_time)
-        end = time.time()
-        speed = len(images) / elapsed_time
-        example_speed.update(speed)
-        global global_steps
-        global global_examples
-        
-        global_examples += len(images)
-        global_steps += 1
+            if global_steps >= (args.max_step / abs(args.world_size)):
+                break
+            i += 1
+    else:
+        for i, (images, target) in enumerate(train_loader):
+            # measure data loading time
+            data_time.update(time.time() - end)
 
-        if i % args.print_freq == 0:
-            progress.display(i)
-            if writer is not None:
-                writer.add_scalar('loss/step', loss.item(), global_steps)
-                writer.add_scalar('speed/step', speed, global_steps)
+            if args.gpu is not None:
+                images = images.cuda(args.gpu, non_blocking=True)
+            if torch.cuda.is_available():
+                target = target.cuda(args.gpu, non_blocking=True)
 
-        if global_steps >= (args.max_step / abs(args.world_size)):
-            break
+            # compute output
+            output = model(images)
+            loss = criterion(output, target)
+
+            # measure accuracy and record loss
+            # acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), images.size(0))
+            # top1.update(acc1[0], images.size(0))
+            # top5.update(acc5[0], images.size(0))
+
+            # compute gradient and do SGD step
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+
+            # measure elapsed time
+            elapsed_time = time.time() - end
+            batch_time.update(elapsed_time)
+            end = time.time()
+            speed = len(images) / elapsed_time
+            example_speed.update(speed)
+
+
+            global_examples += len(images)
+            global_steps += 1
+
+            if i % args.print_freq == 0:
+                progress.display(i)
+                if writer is not None:
+                    writer.add_scalar('loss/step', loss.item(), global_steps)
+                    writer.add_scalar('speed/step', speed, global_steps)
+
+            if global_steps >= (args.max_step / abs(args.world_size)):
+                break
 
 def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter('Time', ':6.3f')

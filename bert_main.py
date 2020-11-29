@@ -267,6 +267,15 @@ def main_worker(gpu, ngpus_per_node, args):
     epoch = 0
     training_steps = 0
 
+    writer = None
+    enable_tensorboard = args.rank <= 0
+    if enable_tensorboard:
+        if args.rank == -1:
+            # No DDP:
+            writer = SummaryWriter(comment='_bert_no_ddp_' + args.data)
+        else:
+            writer = SummaryWriter(comment='_bert_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs_' + args.data)
+
     train_raw_start = time.time()
     while True:
         batch_time = AverageMeter('Time', ':6.3f')
@@ -302,14 +311,6 @@ def main_worker(gpu, ngpus_per_node, args):
 
         pool = ProcessPoolExecutor(1)
         shared_file_list = {}
-        writer = None
-        enable_tensorboard = args.rank <= 0
-        if enable_tensorboard:
-            if args.rank == -1:
-                # No DDP:
-                writer = SummaryWriter(comment='_bert_no_ddp_' + args.data)
-            else:
-                writer = SummaryWriter(comment='_bert_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs_' + args.data)
 
         for f_id in range(f_start_id + 1 , len(files)):
             if get_world_size() > num_files:
@@ -373,12 +374,14 @@ def main_worker(gpu, ngpus_per_node, args):
         print('Total Examples: ' + str(global_examples))
         print('Train duration: ' + str(now - train_raw_start))
         print('Example/Sec: ' + str(global_examples / (now - train_raw_start)))
-
-        if writer is not None:
-            writer.add_scalar('overall_speed/step', global_examples / (now - train_raw_start), global_steps)
-            writer.close()
-
         epoch += 1
+        if epoch >= args.epochs:
+          break
+
+    if writer is not None:
+        writer.add_scalar('overall_speed/step', global_examples / (now - train_raw_start), global_steps)
+        writer.close()
+
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)

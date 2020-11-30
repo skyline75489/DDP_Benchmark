@@ -353,7 +353,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 global global_steps
                 global global_examples
 
-                global_examples += len(batch)
+                global_examples += len(batch[0])
                 global_steps += 1
 
                 if step % args.print_freq == 0:
@@ -365,6 +365,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 if global_steps >= (args.max_step / abs(args.world_size)):
                     break
 
+            if global_steps >= (args.max_step / abs(args.world_size)):
+                break
+            
             del train_dataloader
             train_dataloader, data_file = dataset_future.result(timeout=None)
 

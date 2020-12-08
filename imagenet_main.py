@@ -31,7 +31,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('-j', '--workers', default=1, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=6, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -69,7 +69,7 @@ parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
 parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
-parser.add_argument('--max-step', default=100000, type=int)
+parser.add_argument('--max-step', default=1000000, type=int)
 parser.add_argument('--multiprocessing-distributed', action='store_true',
                     help='Use multi-processing distributed training to launch '
                          'N processes per node, which has N GPUs. This is the '
@@ -159,7 +159,7 @@ def main_worker(gpu, ngpus_per_node, args):
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
             #  args.batch_size = int(args.batch_size / ngpus_per_node)
-            args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
+            # args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         else:
             model.cuda()
@@ -208,7 +208,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     cudnn.benchmark = True
 
-    # Data loading code
+    # Data loading code        
     traindir = os.path.join(args.data, 'train')
     valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -246,9 +246,9 @@ def main_worker(gpu, ngpus_per_node, args):
     if enable_tensorboard:
         if args.rank == -1:
             # No DDP:
-            writer = SummaryWriter(comment='_' + args.arch + '_no_ddp_' + args.data)
+            writer = SummaryWriter(comment='_' + args.arch + '_no_ddp_' + args.data + '_bs_' + str(args.batch_size) + '_nworkers_' + str(args.workers))
         else:
-            writer = SummaryWriter(comment='_' + args.arch + '_' + args.dist_backend + '_' + str(args.world_size) + 'GPUs_' + args.data)
+            writer = SummaryWriter(comment='_' + args.arch + '_' + args.dist_backend + '_' + args.dist_url[0:4].replace(':', '') + '_bs_' + str(args.batch_size) + '_' + str(args.world_size) + 'GPUs_' + args.data  + '_nworkers_' + str(args.workers))
 
     train_raw_start = time.time()
 
@@ -302,6 +302,11 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             elapsed_time = time.time() - end
             batch_time.update(elapsed_time)
             end = time.time()
+            if elapsed_time <= 0:
+                i += 1
+                global_examples += args.batch_size
+                global_steps += 1
+                continue
             speed = args.batch_size / elapsed_time
             example_speed.update(speed)
 
@@ -314,7 +319,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                     writer.add_scalar('loss/step', loss.item(), global_steps)
                     writer.add_scalar('speed/step', speed, global_steps)
 
-            if global_steps >= (args.max_step / abs(args.world_size)):
+            if global_steps >= (args.max_step):
                 break
             i += 1
     else:
@@ -342,7 +347,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             loss.backward()
             optimizer.step()
 
-
+            
             # measure elapsed time
             elapsed_time = time.time() - end
             batch_time.update(elapsed_time)
@@ -350,7 +355,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             speed = len(images) / elapsed_time
             example_speed.update(speed)
 
-
+            
             global_examples += len(images)
             global_steps += 1
 
@@ -360,7 +365,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                     writer.add_scalar('loss/step', loss.item(), global_steps)
                     writer.add_scalar('speed/step', speed, global_steps)
 
-            if global_steps >= (args.max_step / abs(args.world_size)):
+            if global_steps >= (args.max_step):
                 break
 
 def validate(val_loader, model, criterion, args):

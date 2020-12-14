@@ -503,7 +503,7 @@ class CommentBuilder(object):
             s += '_no_ddp_'
         s += '_bs_' + str(args.batch_size) + '_nworkers_' + str(args.workers)
         if args.amp:
-            s += 'amp'
+            s += '_amp'
         return s
 
 

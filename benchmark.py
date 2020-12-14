@@ -27,15 +27,6 @@ import torchvision
 
 from torch.utils.tensorboard import SummaryWriter
 
-from transformers import AutoTokenizer, AutoModel
-from transformers import BertForSequenceClassification, BertTokenizer
-
-if not torch._six.PY3:
-    raise RuntimeError("DDP benchmark requires Python 3")
-
-
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-
 def allgather_object(obj):
     buffer = io.BytesIO()
     torch.save(obj, buffer)
@@ -238,50 +229,6 @@ class TorchvisionBenchmark(Benchmark):
     def generate_target(self):
         return torch.tensor([1] * self.batch_size, dtype=torch.long, device=self.device)
 
-
-class TransformersBenchmark(Benchmark):
-    def __init__(self, device, distributed_backend, bucket_size, model):
-        super(TransformersBenchmark, self).__init__(
-            device,
-            distributed_backend,
-            bucket_size,
-        )
-        self.model = model
-
-    def __str__(self):
-        return "{} with batch size {}".format(self.model, self.batch_size)
-
-    def create_model(self):
-        model = BertForSequenceClassification.from_pretrained(self.model, return_dict=True)
-        model.train()
-        return model.to('cuda')
-
-    def generate_inputs(self):
-        return [
-        "President-elect Joe Biden has expedited the selection of his Cabinet and is planning to make the first of several key announcements next week, an official said, as part of a concerted effort to show that he is moving forward despite President Trump’s increasingly brazen attempts to sabotage the election.",
-"Today, Biden said he has settled on his choice for Treasury secretary, but officials said he’s also reached a decision – or on the cusp of doing so – on other critical Cabinet posts, a few of which are expected to be announced before Thanksgiving.",
-"Monday and Tuesday are being eyed as tentative days for the first introductions of members of Biden’s Cabinet, an official said, with others coming later.",
-"Lael Brainard, a member of the Board of Governors of the Federal Reserve, is seen as the top contender to lead the Treasury Department.",
-"If selected, she would become the first woman Treasury secretary, ", "a move that would help Biden to start to deliver on his pledge to name a diverse Cabinet.",
-"But three officials close to the Biden transition declined to say whether Brainard was the final choice,", "saying it is a closely-held decision that Biden would likely reveal right after Thanksgiving.",
-"But Biden could announce his choice for Secretary of State as soon as next week, officials said, along with another Cabinet post.",
-"While Biden is well-known for his deliberate and often slow decision-making, particularly on personnel matters, the timeline of some Cabinet decisions is being accelerated because of a desire to move quickly to form a new government in the wake of Trump’s intransigence about the election.",
-"Biden had talked with his advisers about taking a far slower approach", "including waiting for the outcome of the Georgia Senate run-offs that will determine control of the Senate, but Trump’s actions have motivated Biden to move without delay.",
-"There is a desire to convey that we are governing, operating and up and running,” an official close to the transition said, explaining the urgency facing Biden’s team in the wake of Trump’s antics.",
-"It’s been only a week since Ron Klain was named White House chief of staff,", "but that decision jumpstarted movement inside the Biden team. And Jeff Zients, a co-chair of the transition, has been working for months on a variety of options for Biden to make about top personnel decisions",
-"When Donna Garrett was growing up in the greater Los Angeles area, it didn't seem strange that her mom worked as an airline pilot. Because her dad had the same profession, captaining an airplane seemed like a normal thing to do.",
-"It was the boring job that my parents did when they went to work,", "Donna, now 26, laughs.",
-"In fact, mom Suzy Garrett was blazing a trail across the skies as one of the first female pilots for regional US carrier SkyWest.",
-"As Donna got older", "she began to take notice. Inspired by her parents' passion and the freedom they enjoyed to explore the world", "she decided to pursue her own career in flying.",
-"Fast forward to September 2019 and Donna was operating an airplane alongside Suzy as SkyWest's first mother-daughter pilot team.",
-"That flight took place over a year ago, but in recent weeks","Donna and Suzy's story has unexpectedly gone viral, with photos of the duo, smiling proudly in the cockpit, spreading across social media.",
-"We knew it was really special,", "says Suzy, who was celebrating 30 years at SkyWest when she paired up with her daughter."
-"She remembers ", "everybody else's reaction",  "as being one of the most heart-warming parts of the experience.",
-"I was really surprised -- as surprised as now it's gone viral -- but even that day, I haven't had my picture taken that much since my wedding! Passengers taking pictures with us, rampers, flight attendants...That just helped make the day even more special, the support was really wonderful.",
-"The pair had hoped to repeat the experience in 2020, but their plans were halted by the Covid pandemic.", "Right now, Suzy is in Los Angeles and Donna is in Chicago and, like many families, they've not been able to spend much time together this year."
-]
-    def generate_target(self):
-        return torch.tensor([1] * self.batch_size, dtype=torch.long, device=self.device)
 
 def main():
     parser = argparse.ArgumentParser(description='PyTorch distributed benchmark suite')

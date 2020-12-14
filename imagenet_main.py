@@ -494,7 +494,7 @@ class CommentBuilder(object):
     def __init__(self, args):
         self.args = args
 
-    def build():
+    def build(self):
         s = '_' + args.arch
         if args.rank == -1:
             s += '_' + args.dist_backend + '_' + args.dist_url[0:4].replace(':', '') + '_' + str(args.world_size) + 'GPUs_'

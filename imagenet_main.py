@@ -75,6 +75,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
+parser.add_argument('--amp', action='store_true',help='Automatic mixed precision')
 
 best_acc1 = 0
 global_steps = 0
@@ -208,7 +209,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     cudnn.benchmark = True
 
-    # Data loading code        
+    # Data loading code
     traindir = os.path.join(args.data, 'train')
     valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -244,11 +245,7 @@ def main_worker(gpu, ngpus_per_node, args):
     writer = None
     enable_tensorboard = args.rank <= 0
     if enable_tensorboard:
-        if args.rank == -1:
-            # No DDP:
-            writer = SummaryWriter(comment='_' + args.arch + '_no_ddp_' + args.data + '_bs_' + str(args.batch_size) + '_nworkers_' + str(args.workers))
-        else:
-            writer = SummaryWriter(comment='_' + args.arch + '_' + args.dist_backend + '_' + args.dist_url[0:4].replace(':', '') + '_bs_' + str(args.batch_size) + '_' + str(args.world_size) + 'GPUs_' + args.data  + '_nworkers_' + str(args.workers))
+        writer = SummaryWriter(comment=CommentBuilder(args).build())
 
     train_raw_start = time.time()
 
@@ -293,8 +290,13 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
     if args.data == 'FAKE':
         i = 0
         for (images, target) in [(generate_inputs(args.batch_size, args.gpu), generate_target(args.batch_size, args.gpu))] * 500:
-            output = model(*images)
-            loss = criterion(output, target)
+            if args.amp:
+                with torch.cuda.amp.autocast():
+                    output = model(*images)
+                    loss = criterion(output, target)
+            else:
+                output = model(*images)
+                loss = criterion(output, target)
             loss.backward()
             optimizer.step()
 
@@ -333,8 +335,13 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                 target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            output = model(images)
-            loss = criterion(output, target)
+            if args.amp:
+                with torch.cuda.amp.autocast():
+                    output = model(images)
+                    loss = criterion(output, target)
+            else:
+                output = model(images)
+                loss = criterion(output, target)
 
             # measure accuracy and record loss
             # acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -347,7 +354,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             loss.backward()
             optimizer.step()
 
-            
+
             # measure elapsed time
             elapsed_time = time.time() - end
             batch_time.update(elapsed_time)
@@ -355,7 +362,6 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             speed = len(images) / elapsed_time
             example_speed.update(speed)
 
-            
             global_examples += len(images)
             global_steps += 1
 
@@ -482,6 +488,22 @@ def accuracy(output, target, topk=(1,)):
             correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
+
+
+class CommentBuilder(object):
+    def __init__(self, args):
+        self.args = args
+
+    def build():
+        s = '_' + args.arch
+        if args.rank == -1:
+            s += '_' + args.dist_backend + '_' + args.dist_url[0:4].replace(':', '') + '_' + str(args.world_size) + 'GPUs_'
+        else:
+            s += '_no_ddp_'
+        s += '_bs_' + str(args.batch_size) + '_nworkers_' + str(args.workers)
+        if args.amp:
+            s += 'amp'
+        return s
 
 
 if __name__ == '__main__':

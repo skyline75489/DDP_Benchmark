@@ -290,15 +290,20 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
     if args.data == 'FAKE':
         i = 0
         for (images, target) in [(generate_inputs(args.batch_size, args.gpu), generate_target(args.batch_size, args.gpu))] * 500:
+            optimizer.zero_grad()
             if args.amp:
+                scaler = torch.cuda.amp.GradScaler()
                 with torch.cuda.amp.autocast():
                     output = model(*images)
                     loss = criterion(output, target)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
             else:
                 output = model(*images)
                 loss = criterion(output, target)
-            loss.backward()
-            optimizer.step()
+                loss.backward()
+                optimizer.step()
 
             # measure elapsed time
             elapsed_time = time.time() - end
@@ -326,6 +331,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             i += 1
     else:
         for i, (images, target) in enumerate(train_loader):
+            optimizer.zero_grad()
             # measure data loading time
             data_time.update(time.time() - end)
 
@@ -336,23 +342,24 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
 
             # compute output
             if args.amp:
+                scaler = torch.cuda.amp.GradScaler()
                 with torch.cuda.amp.autocast():
                     output = model(images)
                     loss = criterion(output, target)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
             else:
                 output = model(images)
                 loss = criterion(output, target)
+                loss.backward()
+                optimizer.step()
 
             # measure accuracy and record loss
             # acc1, acc5 = accuracy(output, target, topk=(1, 5))
             losses.update(loss.item(), images.size(0))
             # top1.update(acc1[0], images.size(0))
             # top5.update(acc5[0], images.size(0))
-
-            # compute gradient and do SGD step
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
 
 
             # measure elapsed time

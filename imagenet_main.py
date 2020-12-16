@@ -287,6 +287,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
     model.train()
     global global_steps
     global global_examples
+    global global_nan_grad_steps
     end = time.time()
 
     if args.data == 'FAKE':

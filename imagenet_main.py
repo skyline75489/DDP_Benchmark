@@ -79,6 +79,7 @@ parser.add_argument('--amp', action='store_true',help='Automatic mixed precision
 
 best_acc1 = 0
 global_steps = 0
+global_nan_grad_steps = 0
 global_examples = 0
 
 def main():
@@ -259,13 +260,14 @@ def main_worker(gpu, ngpus_per_node, args):
 
     global global_steps
     global global_examples
+    global global_nan_grad_steps
 
     now = time.time()
     print('Global Steps: ' +  str(global_steps))
+    print('Global Nan-Grad Steps: ' + str(global_nan_grad_steps))
     print('Total Examples: ' + str(global_examples))
     print('Train duration: ' + str(now - train_raw_start))
     print('Example/Sec: ' + str(global_examples / (now - train_raw_start)))
-
     if writer is not None:
         writer.add_scalar('overall_speed/step', global_examples / (now - train_raw_start), global_steps)
         writer.close()
@@ -299,7 +301,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                 scaler.step(optimizer)
                 found_nan = sum(v.item() for v in scaler._found_inf_per_device(optimizer).values())
                 if found_nan:
-                    print("Found Nan")
+                    global_nan_grad_steps += 1
                 scaler.update()
             else:
                 output = model(*images)
@@ -352,7 +354,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                 scaler.step(optimizer)
                 found_nan = sum(v.item() for v in scaler._found_inf_per_device(optimizer).values())
                 if found_nan:
-                    print("Found Nan")
+                    global_nan_grad_steps += 1
                 scaler.update()
             else:
                 output = model(images)

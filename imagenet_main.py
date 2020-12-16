@@ -297,6 +297,9 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                     loss = criterion(output, target)
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
+                found_nan = sum(v.item() for v in scaler._found_inf_per_device(optimizer).values())
+                if found_nan:
+                    print("Found Nan")
                 scaler.update()
             else:
                 output = model(*images)

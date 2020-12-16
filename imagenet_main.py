@@ -76,6 +76,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 parser.add_argument('--amp', action='store_true',help='Automatic mixed precision')
+parser.add_argument('--data-loader', action='store_true', help='Test data loader only')
 
 best_acc1 = 0
 global_steps = 0
@@ -338,6 +339,14 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
     else:
         for i, (images, target) in enumerate(train_loader):
             # measure data loading time
+            if args.data_loader:
+                global_steps += 1
+                if i % args.print_freq == 0:
+                    print(global_steps)
+                if global_steps >= (args.max_step):
+                    break
+                continue
+
             data_time.update(time.time() - end)
 
             if args.gpu is not None:

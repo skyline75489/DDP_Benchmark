@@ -80,8 +80,8 @@ parser.add_argument('--data-loader', action='store_true', help='Test data loader
 
 best_acc1 = 0
 global_steps = 0
-global_nan_grad_steps = 0
 global_examples = 0
+train_raw_start = time.time()
 
 def main():
     args = parser.parse_args()
@@ -249,8 +249,6 @@ def main_worker(gpu, ngpus_per_node, args):
     if enable_tensorboard:
         writer = SummaryWriter(comment=CommentBuilder(args).build())
 
-    train_raw_start = time.time()
-
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -261,14 +259,14 @@ def main_worker(gpu, ngpus_per_node, args):
 
     global global_steps
     global global_examples
-    global global_nan_grad_steps
+    global train_raw_start
 
     now = time.time()
     print('Global Steps: ' +  str(global_steps))
-    print('Global Nan-Grad Steps: ' + str(global_nan_grad_steps))
     print('Total Examples: ' + str(global_examples))
     print('Train duration: ' + str(now - train_raw_start))
     print('Example/Sec: ' + str(global_examples / (now - train_raw_start)))
+
     if writer is not None:
         writer.add_scalar('overall_speed/step', global_examples / (now - train_raw_start), global_steps)
         writer.close()
@@ -288,7 +286,6 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
     model.train()
     global global_steps
     global global_examples
-    global global_nan_grad_steps
     end = time.time()
 
     if args.data == 'FAKE':
@@ -301,9 +298,6 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                     loss = criterion(output, target)
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
-                found_nan = sum(v.item() for v in scaler._found_inf_per_device(optimizer).values())
-                if found_nan:
-                    global_nan_grad_steps += 1
                 scaler.update()
             else:
                 output = model(*images)
@@ -312,6 +306,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                 optimizer.step()
 
             optimizer.zero_grad()
+
             # measure elapsed time
             elapsed_time = time.time() - end
             batch_time.update(elapsed_time)
@@ -339,6 +334,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
     else:
         for i, (images, target) in enumerate(train_loader):
             # measure data loading time
+            data_time.update(time.time() - end)
             if args.data_loader:
                 global_steps += 1
                 if i % args.print_freq == 0:
@@ -346,8 +342,6 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                 if global_steps >= (args.max_step):
                     break
                 continue
-
-            data_time.update(time.time() - end)
 
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
@@ -362,9 +356,6 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                     loss = criterion(output, target)
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
-                found_nan = sum(v.item() for v in scaler._found_inf_per_device(optimizer).values())
-                if found_nan:
-                    global_nan_grad_steps += 1
                 scaler.update()
             else:
                 output = model(images)
@@ -373,6 +364,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
                 optimizer.step()
 
             optimizer.zero_grad()
+
             # measure accuracy and record loss
             # acc1, acc5 = accuracy(output, target, topk=(1, 5))
             losses.update(loss.item(), images.size(0))
@@ -387,8 +379,12 @@ def train(train_loader, model, criterion, optimizer, epoch, writer, args):
             speed = len(images) / elapsed_time
             example_speed.update(speed)
 
-            global_examples += len(images)
-            global_steps += 1
+            # Skip warmup
+            if i == 10:
+                train_raw_start = time.time()
+            if i >= 10:
+                global_examples += len(images)
+                global_steps += 1
 
             if i % args.print_freq == 0:
                 progress.display(i)
@@ -522,10 +518,13 @@ class CommentBuilder(object):
     def build(self):
         args = self.args
         s = '_' + args.arch
-        if args.rank == -1:
-            s += '_' + args.dist_backend + '_' + args.dist_url[0:4].replace(':', '') + '_' + str(args.world_size) + 'GPUs_'
+        if args.data_loader:
+            s += '_data_loader'
         else:
-            s += '_no_ddp_'
+            if args.rank == -1:
+                s += '_' + args.dist_backend + '_' + args.dist_url[0:4].replace(':', '') + '_' + str(args.world_size) + 'GPUs_'
+            else:
+                s += '_no_ddp_'
         s += '_bs_' + str(args.batch_size) + '_nworkers_' + str(args.workers)
         if args.amp:
             s += '_amp'

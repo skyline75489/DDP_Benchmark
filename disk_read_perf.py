@@ -39,12 +39,13 @@ dirs = os.listdir(path)
 for i in dirs:
     i_start = int(round(time.time()*1000))
     d =  os.path.join(path, i)
+    i_size = 0
     for f in os.listdir(d):
         file_path = os.path.join(d, f)
         f = open(file_path, mode='rb')
         content = f.read()
         f.close()
-        i_size = os.path.getsize(file_path)
+        i_size = i_size + os.path.getsize(file_path)
         size = size + i_size
     i_end = int(round(time.time()*1000))
     i_time = i_end - i_start

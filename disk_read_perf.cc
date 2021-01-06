@@ -51,7 +51,7 @@ int main(int argc, char* argv[]) {
     std::string path = std::string(argv[1]);
     stringvec dirs;
     read_directory(path, dirs);
-    size_t total_size = 0;
+    uint64_t total_size = 0;
     std::vector<char> buffer;
     buffer.reserve(1024 * 1024 * 30);
     for (stringvec::iterator it = dirs.begin(); it != dirs.end(); it++)
@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
         read_directory(currDir2, subDirs);
 
         uint64_t i_start = timeSinceEpochMillisec();
-        size_t size = 0;
+        uint64_t size = 0;
         for (stringvec::iterator it = subDirs.begin(); it != subDirs.end(); it++)
         {
             std::string filename = *it;
